@@ -3,10 +3,13 @@ import os
 import datetime
 import random
 
+from skill_manager import SkillManager
+
 class GrowthBot:
     def __init__(self, user_data_dir="user_data"):
         self.user_data_dir = user_data_dir
         os.makedirs(user_data_dir, exist_ok=True)
+        self.skill_manager = SkillManager() # Initialize SkillManager
 
     def _get_user_data_path(self, user_id):
         return os.path.join(self.user_data_dir, f"{user_id}.json")
@@ -15,7 +18,13 @@ class GrowthBot:
         path = self._get_user_data_path(user_id)
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Ensure new fields are present for existing users
+                if "correction_records" not in data:
+                    data["correction_records"] = []
+                if "last_bot_response" not in data: # To track for self-correction feedback
+                    data["last_bot_response"] = ""
+                return data
         else:
             # Initialize new user data
             return {
@@ -38,7 +47,9 @@ class GrowthBot:
                     "boredom": 0.0,
                     "anger": 0.0
                 },
-                "memory": []
+                "memory": [],
+                "correction_records": [], # New field for self-correction
+                "last_bot_response": "" # New field to store bot's last response for feedback
             }
 
     def _save_user_data(self, user_id, data):
@@ -49,8 +60,25 @@ class GrowthBot:
     def get_response(self, user_id, message_text):
         user_data = self._load_user_data(user_id)
 
+        # --- Self-Correction Feedback --- #
+        # Check if the user's current message is feedback to the bot's last response
+        if user_data["last_bot_response"] and any(keyword in message_text for keyword in ["不對", "錯了", "不是這樣", "不正確"]):
+            self._record_correction(user_data, user_data["last_bot_response"], message_text)
+            # After recording correction, clear last_bot_response to avoid double-counting feedback
+            user_data["last_bot_response"] = ""
+            # Respond to the feedback directly, without further processing for this turn
+            self._save_user_data(user_id, user_data)
+            return "謝謝您的指正，我會努力學習改進的！"
+
         # Update last interaction time
         user_data["last_interaction"] = datetime.datetime.now().isoformat()
+
+        # --- Skill Plugin System --- #
+        skill_response = self.skill_manager.get_skill_response(message_text, user_data)
+        if skill_response:
+            self._save_user_data(user_id, user_data)
+            user_data["last_bot_response"] = skill_response # Store bot's response
+            return skill_response
 
         # --- Learning Module (Placeholder) ---
         self._learn_from_message(user_data, message_text)
@@ -69,7 +97,38 @@ class GrowthBot:
         response = self._generate_response(user_data, message_text)
 
         self._save_user_data(user_id, user_data)
+        user_data["last_bot_response"] = response # Store bot's response
         return response
+
+    def _record_correction(self, user_data, bot_response, user_feedback):
+        # Store the interaction for future self-correction
+        correction_entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "bot_response": bot_response,
+            "user_feedback": user_feedback,
+            "user_level": user_data["level"]
+        }
+        user_data["correction_records"].append(correction_entry)
+        # Keep correction records from growing indefinitely, limit to 50 records
+        if len(user_data["correction_records"]) > 50:
+            user_data["correction_records"].pop(0)
+
+    def _apply_self_correction(self, user_data, message_text, current_response):
+        # Simple self-correction: avoid responses that previously received negative feedback
+        # Higher level bots can actively try to find better responses
+        level = user_data["level"]
+        for record in user_data["correction_records"]:
+            # If the current message is similar to a message that previously led to a bad response
+            # and the current response is the same as the bad response
+            if record["bot_response"] == current_response and \
+               any(word in message_text for word in record["user_feedback"].split()): # Simplified similarity check
+                if level <= 5: # Low level: just avoid the bad response
+                    return "嗯...讓我想想別的說法。" # A generic avoidance
+                elif level <= 10: # Medium level: try to give a slightly different default response
+                    return random.choice([r for r in self.response_templates["default"] if r != current_response])
+                else: # High level: actively try to provide a better response (placeholder for now)
+                    return "我記得上次這樣回答不太好，這次換個方式說：" + random.choice([r for r in self.response_templates["default"] if r != current_response])
+        return current_response # No correction needed
 
     def _learn_from_message(self, user_data, message_text):
         # Implement vocabulary learning and personality adaptation here
@@ -232,6 +291,21 @@ class GrowthBot:
                 "那你打算怎麼辦？",
                 "你對這件事有什麼看法？"
             ],
+            "opinion": [
+                "我覺得...",
+                "我不太同意...",
+                "我的看法是..."
+            ],
+            "advice": [
+                "我建議你可以試試看...",
+                "或許你可以考慮...",
+                "我覺得這樣做會更好。"
+            ],
+            "care": [
+                "你還好嗎？",
+                "有什麼我可以幫忙的嗎？",
+                "我很關心你。"
+            ],
             "memory_recall": [
                 "你之前是不是說過{memory_content}？",
                 "讓我想想，你是不是對{memory_content}有興趣？",
@@ -243,9 +317,12 @@ class GrowthBot:
                 "為什麼小鳥喜歡站在電線上？ 因為牠們喜歡聽電線桿唱歌！"
             ]
         }
+        self.response_templates = response_templates # Make it accessible for self-correction
 
-        # Choose response based on level and emotional state
         response = random.choice(response_templates["default"])
+
+        # Apply self-correction before generating a new response
+        response = self._apply_self_correction(user_data, message_text, response)
 
         # Level 1-5: Simple responses, vocabulary imitation
         if level <= 5:
@@ -260,17 +337,19 @@ class GrowthBot:
         # Level 6-10: Ask questions, proactively mention memories
         elif 6 <= level <= 10:
             if random.random() < personality["curiosity_level"] and emotion["curiosity"] > 0.3:
-                response = random.choice(response_templates["curious"])
+                response = random.choice(response_templates["question"])
             elif memories and random.random() < 0.2: # 20% chance to recall memory
                 recent_memory = random.choice(memories[-5:]) # Pick from last 5 memories
                 response = random.choice(response_templates["memory_recall"]).format(memory_content=recent_memory["content"])
             else:
                 response = random.choice(response_templates["default"])
 
-        # Level 11-20: Jokes, catchphrases
+        # Level 11-20: Jokes, catchphrases, express opinions
         elif 11 <= level <= 20:
             if random.random() < personality["humor_level"] and emotion["happiness"] > 0.6:
                 response = random.choice(response_templates["joke"])
+            elif random.random() < 0.3: # 30% chance to express opinion
+                response = random.choice(response_templates["opinion"])
             elif personality["catchphrases"] and random.random() < 0.3:
                 response = random.choice(personality["catchphrases"]) + "，" + random.choice(response_templates["default"])
             elif memories and random.random() < 0.2:
@@ -279,7 +358,7 @@ class GrowthBot:
             else:
                 response = random.choice(response_templates["default"])
 
-        # Level 21+: Full personality, emotions, care
+        # Level 21+: Full personality, emotions, care, advice
         else: # level >= 21
             # Prioritize emotional responses
             if emotion["happiness"] > 0.7:
@@ -294,41 +373,14 @@ class GrowthBot:
                 response = random.choice(response_templates["bored"])
             elif random.random() < personality["humor_level"] and personality["humor_level"] > 0.5:
                 response = random.choice(response_templates["joke"])
+            elif random.random() < 0.4: # 40% chance to give advice or care
+                response = random.choice(response_templates["advice"] + response_templates["care"])
             elif personality["catchphrases"] and random.random() < 0.4:
                 response = random.choice(personality["catchphrases"]) + "，" + random.choice(response_templates["default"])
             elif memories and random.random() < 0.3:
-                recent_memory = random.choice(memories) # Can recall any memory now
+                recent_memory = random.choice(memories[-5:])
                 response = random.choice(response_templates["memory_recall"]).format(memory_content=recent_memory["content"])
             else:
                 response = random.choice(response_templates["default"])
 
-        # Final touch: incorporate learned vocabulary if possible and relevant
-        if vocabulary and random.random() < 0.1: # Small chance to inject a learned word
-            most_common_word = max(vocabulary, key=lambda k: vocabulary[k]["count"])
-            if most_common_word not in response:
-                response += f" (說到這裡，你常用'{most_common_word}'這個詞呢！)"
-
         return response
-
-
-# Example Usage (for testing)
-if __name__ == "__main__":
-    bot = GrowthBot()
-    user_id = "test_user_123"
-
-    print(f"Initial response: {bot.get_response(user_id, '你好')}")
-    print(f"Second response: {bot.get_response(user_id, '我今天很開心')}")
-    print(f"Third response: {bot.get_response(user_id, '哈哈，你真有趣')}")
-
-    # You can inspect the user_data/test_user_123.json file to see changes
-    print(f"User data for {user_id} saved to user_data/{user_id}.json")
-
-    # Simulate some interactions to see changes
-    for _ in range(10):
-        bot.get_response(user_id, random.choice(['今天天氣很好', '我喜歡吃蘋果', '你覺得呢？', '嗯嗯', '哈哈']))
-
-    print(f"After more interactions: {bot.get_response(user_id, '再見')}")
-
-    # Clean up test data
-    # os.remove(bot._get_user_data_path(user_id))
-    # print(f"Cleaned up user data for {user_id}")
