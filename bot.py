@@ -64,6 +64,7 @@ class GrowthBot:
 
     def _process_user_message(self, user_id, message_text):
         user_data = self.memory['users'].get(user_id, {})
+        now = datetime.now().isoformat()
         response = ""
         emotion_change = 0 # -1 to 1, how much user message affects bot's happiness
 
