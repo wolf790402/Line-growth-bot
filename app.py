@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import base64
 import logging
+import random
 import requests as req
 from flask import Flask, request
 
@@ -83,15 +84,59 @@ def callback():
 
     for event in events:
         try:
-            if event.get("type") == "message" and event["message"].get("type") == "text":
+            if event.get("type") == "message":
                 user_id = event["source"]["userId"]
-                message_text = event["message"]["text"]
                 reply_token = event["replyToken"]
+                msg_type = event["message"].get("type")
 
-                logger.info(f"Message from {user_id}: {message_text}")
-                response_text = bot.get_response(user_id, message_text)
-                logger.info(f"Response: {response_text}")
-                reply_message(reply_token, response_text)
+                if msg_type == "text":
+                    message_text = event["message"]["text"]
+                    logger.info(f"Message from {user_id}: {message_text}")
+                    response_text = bot.get_response(user_id, message_text)
+                    logger.info(f"Response: {response_text}")
+                    reply_message(reply_token, response_text)
+
+                elif msg_type == "sticker":
+                    sticker_responses = [
+                        "哈哈，好可愛的貼圖！",
+                        "收到你的貼圖了～",
+                        "我也想傳貼圖給你，可惜我還不會 😆",
+                        "這個貼圖好有趣！",
+                        "貼圖收到！你今天心情不錯吧？",
+                        "哈哈哈，我喜歡這個貼圖！",
+                        "雖然我看不太懂貼圖，但感覺你很開心～",
+                        "好想學會用貼圖回你喔！",
+                    ]
+                    reply_message(reply_token, random.choice(sticker_responses))
+
+                elif msg_type == "image":
+                    image_responses = [
+                        "哇，你傳了一張圖片給我！可惜我現在還看不懂圖片。",
+                        "收到圖片了！等我學會 OCR 技能就能看懂了。",
+                        "好想看懂你傳的圖片喔，再等我升級一下！",
+                        "圖片收到～雖然我現在還是個看不懂圖的小笨蛋。",
+                    ]
+                    reply_message(reply_token, random.choice(image_responses))
+
+                elif msg_type == "video":
+                    video_responses = [
+                        "你傳了影片給我！可惜我現在還不會看影片。",
+                        "影片收到了，等我等級更高就能處理影片了！",
+                        "哇是影片！我好期待學會看影片的那天。",
+                    ]
+                    reply_message(reply_token, random.choice(video_responses))
+
+                elif msg_type == "audio":
+                    audio_responses = [
+                        "你傳了語音給我！可惜我現在還聽不懂。",
+                        "語音收到了～等我學會聽力技能就能聽懂了！",
+                        "好想聽懂你說什麼喔，再給我一點時間成長！",
+                    ]
+                    reply_message(reply_token, random.choice(audio_responses))
+
+                else:
+                    reply_message(reply_token, "我收到了，但這種訊息我還看不太懂，多跟我聊天讓我成長吧！")
+
         except Exception as e:
             logger.error(f"Event processing error: {e}")
 
