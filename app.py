@@ -3,7 +3,7 @@ import json
 import hashlib
 import hmac
 import base64
-import requests
+import requests as req
 from flask import Flask, request, abort
 
 from config import LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET
@@ -13,12 +13,12 @@ app = Flask(__name__)
 bot = GrowthBot()
 
 def verify_signature(body, signature):
-    hash = hmac.new(
+    hash_value = hmac.new(
         LINE_CHANNEL_SECRET.encode('utf-8'),
         body.encode('utf-8'),
         hashlib.sha256
     ).digest()
-    expected_signature = base64.b64encode(hash).decode('utf-8')
+    expected_signature = base64.b64encode(hash_value).decode('utf-8')
     return hmac.compare_digest(expected_signature, signature)
 
 def reply_message(reply_token, text):
@@ -31,7 +31,7 @@ def reply_message(reply_token, text):
         'replyToken': reply_token,
         'messages': [{'type': 'text', 'text': text}]
     }
-    requests.post(url, headers=headers, json=data)
+    req.post(url, headers=headers, json=data)
 
 @app.route("/callback", methods=["POST"])
 def callback():
