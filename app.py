@@ -13,13 +13,19 @@ app = Flask(__name__)
 bot = GrowthBot()
 
 def verify_signature(body, signature):
-    hash_value = hmac.new(
-        LINE_CHANNEL_SECRET.encode('utf-8'),
-        body.encode('utf-8'),
-        hashlib.sha256
-    ).digest()
-    expected_signature = base64.b64encode(hash_value).decode('utf-8')
-    return hmac.compare_digest(expected_signature, signature)
+    """Verify LINE webhook signature"""
+    if not signature:
+        return False
+    try:
+        hash_value = hmac.new(
+            LINE_CHANNEL_SECRET.encode('utf-8'),
+            body.encode('utf-8'),
+            hashlib.sha256
+        ).digest()
+        expected_signature = base64.b64encode(hash_value).decode('utf-8')
+        return hmac.compare_digest(expected_signature, signature)
+    except Exception:
+        return False
 
 def reply_message(reply_token, text):
     url = 'https://api.line.me/v2/bot/message/reply'
@@ -38,10 +44,16 @@ def callback():
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
 
+    # Verify signature
     if not verify_signature(body, signature):
         abort(400)
 
-    events = json.loads(body).get("events", [])
+    # Parse events
+    try:
+        events = json.loads(body).get("events", [])
+    except json.JSONDecodeError:
+        return "OK"
+
     for event in events:
         if event.get("type") == "message" and event["message"].get("type") == "text":
             user_id = event["source"]["userId"]
@@ -52,6 +64,10 @@ def callback():
             reply_message(reply_token, response_text)
 
     return "OK"
+
+@app.route("/", methods=["GET"])
+def health():
+    return "Bot is running!"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
